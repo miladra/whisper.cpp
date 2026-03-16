@@ -19,7 +19,12 @@ class Recorder {
     private var recorder: AudioRecordThread? = null
 
     suspend fun startRecording(outputFile: File, onError: (Exception) -> Unit) = withContext(scope.coroutineContext) {
-        recorder = AudioRecordThread(outputFile, onError)
+        recorder = AudioRecordThread(outputFile, null, onError)
+        recorder?.start()
+    }
+
+    suspend fun startStreaming(onBufferReceived: (ShortArray) -> Unit, onError: (Exception) -> Unit) = withContext(scope.coroutineContext) {
+        recorder = AudioRecordThread(null, onBufferReceived, onError)
         recorder?.start()
     }
 
@@ -32,7 +37,8 @@ class Recorder {
 }
 
 private class AudioRecordThread(
-    private val outputFile: File,
+    private val outputFile: File?,
+    private val onBufferReceived: ((ShortArray) -> Unit)?,
     private val onError: (Exception) -> Unit
 ) :
     Thread("AudioRecorder") {
@@ -64,16 +70,23 @@ private class AudioRecordThread(
                 while (!quit.get()) {
                     val read = audioRecord.read(buffer, 0, buffer.size)
                     if (read > 0) {
-                        for (i in 0 until read) {
-                            allData.add(buffer[i])
+                        val chunk = buffer.copyOfRange(0, read)
+                        if (onBufferReceived != null) {
+                            onBufferReceived.invoke(chunk)
+                        } else {
+                            for (i in 0 until read) {
+                                allData.add(buffer[i])
+                            }
                         }
-                    } else {
+                    } else if (read < 0) {
                         throw java.lang.RuntimeException("audioRecord.read returned $read")
                     }
                 }
 
                 audioRecord.stop()
-                encodeWaveFile(outputFile, allData.toShortArray())
+                if (outputFile != null) {
+                    encodeWaveFile(outputFile, allData.toShortArray())
+                }
             } finally {
                 audioRecord.release()
             }
